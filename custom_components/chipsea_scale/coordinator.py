@@ -15,6 +15,7 @@ from bleak_retry_connector import BleakClientWithServiceCache, establish_connect
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CHARACTERISTIC_UUID, DOMAIN
@@ -57,6 +58,7 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
     ) -> None:
         """Initialize."""
         self.address = address.upper()
+        self._config_entry = config_entry
         self._client: BleakClientWithServiceCache | None = None
         self._ble_device: BLEDevice | None = None
         self._connect_lock = asyncio.Lock()
@@ -65,8 +67,9 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         self._connection_attempts = 0
         self._last_successful_connection = None
         self._total_disconnections = 0
-        self._last_connection_attempt = None
-        self._min_reconnect_interval = timedelta(seconds=5)
+        self._reconnect_task: asyncio.Task | None = None
+        self._ha_started = False
+        self._pending_reconnect = False
 
         super().__init__(
             hass,
@@ -74,6 +77,13 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
             name=DOMAIN,
             update_interval=None,
             config_entry=config_entry,
+        )
+
+        self._bluetooth_callback_unload = None
+
+        # Listen for HA startup completion
+        self.hass.bus.async_listen_once(
+            EVENT_HOMEASSISTANT_STARTED, self._on_ha_started
         )
 
     @property
@@ -105,31 +115,38 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         }
 
     @callback
+    def _on_ha_started(self, _) -> None:
+        """Handle HA startup completion."""
+        self._ha_started = True
+        if self._pending_reconnect:
+            _LOGGER.info("HA started, processing pending reconnection")
+            self._pending_reconnect = False
+            self._reconnect_task = self.hass.async_create_task(self._async_reconnect())
+
+    @callback
     def _async_handle_bluetooth_event(
         self,
         service_info: BluetoothServiceInfoBleak,
         change: bluetooth.BluetoothChange,
     ) -> None:
         """Handle Bluetooth events."""
+        _LOGGER.debug("Bluetooth event received: change=%s, address=%s, rssi=%s",
+                     change, service_info.address, getattr(service_info, 'rssi', 'N/A'))
         if change == bluetooth.BluetoothChange.ADVERTISEMENT:
             self._ble_device = service_info.device
-
             if not self._client or not self._client.is_connected:
-                now = datetime.now()
-                if (self._last_connection_attempt is None or 
-                    now - self._last_connection_attempt >= self._min_reconnect_interval):
-                    _LOGGER.debug(
-                        "Device advertisement detected for %s, attempting reconnection",
-                        self.address,
-                    )
-                    self._last_connection_attempt = now
-                    self.hass.create_task(self._async_reconnect())
+                # Cancel any ongoing reconnection attempt
+                if self._reconnect_task and not self._reconnect_task.done():
+                    self._reconnect_task.cancel()
+
+                if self._ha_started:
+                    # HA has started, safe to reconnect immediately
+                    _LOGGER.info("Scale detected, attempting reconnection")
+                    self._reconnect_task = self.hass.async_create_task(self._async_reconnect())
                 else:
-                    _LOGGER.debug(
-                        "Device advertisement detected for %s, but throttling reconnection (last attempt %.1fs ago)",
-                        self.address,
-                        (now - self._last_connection_attempt).total_seconds()
-                    )
+                    # HA still starting up, defer reconnection
+                    _LOGGER.info("Scale detected during startup, deferring reconnection")
+                    self._pending_reconnect = True
 
     async def _async_update_data(self) -> ChipseaScaleData:
         """Return current data - all updates are reactive via Bluetooth notifications."""
@@ -160,8 +177,6 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
                     self._ble_device,
                     self.address,
                     disconnected_callback=self._on_disconnect,
-                    timeout=15.0,
-                    max_attempts=2,
                 )
 
                 await self._setup_notifications()
@@ -349,29 +364,58 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         """Handle disconnection."""
         self._total_disconnections += 1
         _LOGGER.info("Chipsea Scale disconnected (total: %d)", self._total_disconnections)
+
+        # Reset connection state
         self._client = None
         self._notification_enabled = False
-        
-        # Trigger entity update to reflect unavailable state
+        self._unavailable_logged = False
+        self.data = None
+
+        # Cancel ongoing reconnection and re-register callback
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+        self._register_bluetooth_callback()
+
         self.async_update_listeners()
-        
+
+    def _register_bluetooth_callback(self) -> None:
+        """Register Bluetooth callback for device detection."""
+        if self._bluetooth_callback_unload:
+            self._bluetooth_callback_unload()
+
+        self._bluetooth_callback_unload = bluetooth.async_register_callback(
+            self.hass,
+            self._async_handle_bluetooth_event,
+            {"address": self.address},
+            bluetooth.BluetoothScanningMode.ACTIVE,
+        )
 
     async def _async_reconnect(self) -> None:
         """Attempt to reconnect to the scale."""
         _LOGGER.debug("Attempting to reconnect to Chipsea Scale")
-        with contextlib.suppress(UpdateFailed):
+        try:
             await self._ensure_connected()
+        except asyncio.CancelledError:
+            _LOGGER.debug("Connection attempt was cancelled")
+            raise
+        except UpdateFailed:
+            pass
 
     async def async_shutdown(self) -> None:
         """Disconnect from the scale."""
+        # Cancel reconnection task and unload callback
+        if self._reconnect_task and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+        if self._bluetooth_callback_unload:
+            self._bluetooth_callback_unload()
+
+        # Disconnect client
         if self._client and self._client.is_connected:
-            try:
+            with contextlib.suppress(BleakError):
                 if self._notification_enabled:
                     await self._client.stop_notify(CHARACTERISTIC_UUID)
                 await self._client.disconnect()
-            except BleakError as err:
-                _LOGGER.error("Error during shutdown: %s", err)
-            finally:
-                self._client = None
-                self._notification_enabled = False
+
+        self._client = None
+        self._notification_enabled = False
 
