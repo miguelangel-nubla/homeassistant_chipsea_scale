@@ -10,7 +10,7 @@
   "issue_tracker": "https://github.com/miguelangel-nubla/homeassistant_chipsea_scale/issues",
   "quality_scale": "gold",
   "requirements": ["bleak>=0.20.0", "bleak-retry-connector>=3.0.0"],
-  "version": "1.1.0",
+  "version": "1.2.0",
   "bluetooth": [
     {
       "service_uuid": "0000fff0-0000-1000-8000-00805f9b34fb"

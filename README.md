@@ -19,7 +19,8 @@ A Home Assistant custom integration for Chipsea-based Bluetooth smart scales inc
 - **Real-time Updates**: Instant weight readings when scale is in use
 - **Multiple Units**: Supports grams, kilograms, pounds, and ounces
 - **Smart Availability**: Entity becomes unavailable when scale goes to sleep
-- **Battery Efficient**: Purely reactive - no unnecessary polling or connection attempts
+- **Battery Efficient**: Connects only while the scale is advertising - no connection attempts while it sleeps
+- **Reliable Reconnection**: Keeps retrying while the scale is awake, so a failed attempt or a quick power-cycle never leaves it disconnected
 - **Gold Quality**: Meets Home Assistant's Gold quality standards
 
 ## Supported Devices

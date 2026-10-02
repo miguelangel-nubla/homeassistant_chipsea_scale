@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 
-from homeassistant.components import bluetooth
 from homeassistant.const import CONF_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
@@ -23,15 +22,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ChipseaScaleConfigEntry)
     coordinator = ChipseaScaleDataUpdateCoordinator(hass, address, entry)
     entry.runtime_data = coordinator
 
-    # Register for Bluetooth advertisements to detect when device comes back online
-    entry.async_on_unload(
-        bluetooth.async_register_callback(
-            hass,
-            coordinator._async_handle_bluetooth_event,  # noqa: SLF001
-            {"address": address.upper()},
-            bluetooth.BluetoothScanningMode.ACTIVE,
-        )
-    )
+    # Watch for advertisements and keep the scale connected while it is awake
+    entry.async_on_unload(coordinator.async_start())
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True

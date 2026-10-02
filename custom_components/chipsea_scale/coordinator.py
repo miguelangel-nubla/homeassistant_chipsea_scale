@@ -9,13 +9,11 @@ import struct
 from typing import TYPE_CHECKING, Any
 
 from bleak import BleakError
-from bleak.backends.device import BLEDevice
 from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 
 from homeassistant.components import bluetooth
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
+from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import CHARACTERISTIC_UUID, DOMAIN
@@ -46,6 +44,12 @@ UNIT_KILOGRAMS = 0x08
 # Weight validation limits
 MAX_WEIGHT_GRAMS = 5000  # 5kg in grams
 
+# Reconnection policy
+ADVERTISEMENT_FRESH_SECONDS = 30  # Scale counts as awake if it advertised this recently
+IDLE_POLL_SECONDS = 5  # How often to check for advertisements while the scale sleeps
+RETRY_BACKOFF_SECONDS = (2, 5, 10, 20, 30)  # Delay after each consecutive failed connect
+CONNECT_MAX_ATTEMPTS = 2  # Attempts per connect; the reconnect loop retries beyond that
+
 
 class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData]):
     """Class to manage fetching data from the Chipsea Scale."""
@@ -60,7 +64,6 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         self.address = address.upper()
         self._config_entry = config_entry
         self._client: BleakClientWithServiceCache | None = None
-        self._ble_device: BLEDevice | None = None
         self._connect_lock = asyncio.Lock()
         self._notification_enabled = False
         self._unavailable_logged = False
@@ -68,8 +71,7 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         self._last_successful_connection = None
         self._total_disconnections = 0
         self._reconnect_task: asyncio.Task | None = None
-        self._ha_started = False
-        self._pending_reconnect = False
+        self._shutting_down = False
 
         super().__init__(
             hass,
@@ -77,13 +79,6 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
             name=DOMAIN,
             update_interval=None,
             config_entry=config_entry,
-        )
-
-        self._bluetooth_callback_unload = None
-
-        # Listen for HA startup completion
-        self.hass.bus.async_listen_once(
-            EVENT_HOMEASSISTANT_STARTED, self._on_ha_started
         )
 
     @property
@@ -115,13 +110,16 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         }
 
     @callback
-    def _on_ha_started(self, _) -> None:
-        """Handle HA startup completion."""
-        self._ha_started = True
-        if self._pending_reconnect:
-            _LOGGER.info("HA started, processing pending reconnection")
-            self._pending_reconnect = False
-            self._reconnect_task = self.hass.async_create_task(self._async_reconnect())
+    def async_start(self) -> CALLBACK_TYPE:
+        """Start watching for the scale; returns a callback that stops it."""
+        # Registering replays the last known advertisement, so this also
+        # starts the first connection attempt if the scale is already awake.
+        return bluetooth.async_register_callback(
+            self.hass,
+            self._async_handle_bluetooth_event,
+            {"address": self.address},
+            bluetooth.BluetoothScanningMode.ACTIVE,
+        )
 
     @callback
     def _async_handle_bluetooth_event(
@@ -133,20 +131,61 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         _LOGGER.debug("Bluetooth event received: change=%s, address=%s, rssi=%s",
                      change, service_info.address, getattr(service_info, 'rssi', 'N/A'))
         if change == bluetooth.BluetoothChange.ADVERTISEMENT:
-            self._ble_device = service_info.device
-            if not self._client or not self._client.is_connected:
-                # Cancel any ongoing reconnection attempt
-                if self._reconnect_task and not self._reconnect_task.done():
-                    self._reconnect_task.cancel()
+            self._async_ensure_reconnect_loop()
 
-                if self._ha_started:
-                    # HA has started, safe to reconnect immediately
-                    _LOGGER.info("Scale detected, attempting reconnection")
-                    self._reconnect_task = self.hass.async_create_task(self._async_reconnect())
-                else:
-                    # HA still starting up, defer reconnection
-                    _LOGGER.info("Scale detected during startup, deferring reconnection")
-                    self._pending_reconnect = True
+    @callback
+    def _async_ensure_reconnect_loop(self) -> None:
+        """Start the reconnect loop unless connected or it is already running."""
+        if self._shutting_down or self.is_connected:
+            return
+        if self._reconnect_task and not self._reconnect_task.done():
+            # Never cancel an attempt in flight; the loop retries on its own
+            return
+        # Background task so a connection attempt never holds up HA startup
+        self._reconnect_task = self._config_entry.async_create_background_task(
+            self.hass,
+            self._async_reconnect_loop(),
+            f"{DOMAIN} reconnect {self.address}",
+        )
+
+    async def _async_reconnect_loop(self) -> None:
+        """Connect while the scale is advertising, retrying until it succeeds.
+
+        HA only calls back when an advertisement's content changes, so an
+        unchanged advertisement never calls back again until HA forgets the
+        scale, minutes after it goes quiet. So this loop watches the last
+        advertisement's timestamp instead of waiting for callbacks.
+        """
+        failures = 0
+        while not self.is_connected:
+            service_info = bluetooth.async_last_service_info(
+                self.hass, self.address, connectable=True
+            )
+            if service_info is None:
+                # HA forgot the scale; its next advertisement calls back again
+                _LOGGER.debug("Scale no longer known to Bluetooth, stopping reconnect loop")
+                return
+
+            if bluetooth.MONOTONIC_TIME() - service_info.time > ADVERTISEMENT_FRESH_SECONDS:
+                # Asleep, but HA still remembers it, so waking up with the same
+                # advertisement will not call back. Keep watching.
+                failures = 0
+                await asyncio.sleep(IDLE_POLL_SECONDS)
+                continue
+
+            try:
+                await self._ensure_connected()
+            except UpdateFailed:
+                pass
+            except Exception:  # noqa: BLE001 - an escaped error would end the loop for good
+                _LOGGER.exception("Unexpected error while connecting to Chipsea Scale")
+            if self.is_connected:
+                return
+
+            delay = RETRY_BACKOFF_SECONDS[min(failures, len(RETRY_BACKOFF_SECONDS) - 1)]
+            failures += 1
+            _LOGGER.debug("Connection attempt failed, retrying in %ds", delay)
+            await asyncio.sleep(delay)
 
     async def _async_update_data(self) -> ChipseaScaleData:
         """Return current data - all updates are reactive via Bluetooth notifications."""
@@ -160,26 +199,42 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
 
             _LOGGER.debug("Connecting to Chipsea Scale at %s", self.address)
 
-            # Get BLE device
-            if not self._ble_device:
-                self._ble_device = bluetooth.async_ble_device_from_address(
-                    self.hass, self.address, connectable=True
-                )
+            # Always look up the current device; a cached one may point at a
+            # proxy that no longer hears the scale
+            ble_device = bluetooth.async_ble_device_from_address(
+                self.hass, self.address, connectable=True
+            )
 
-            if not self._ble_device:
+            if not ble_device:
                 raise UpdateFailed(f"Could not find device with address {self.address}")
 
             # Connect to device using bleak-retry-connector
             try:
                 self._connection_attempts += 1
-                self._client = await establish_connection(
+                client = await establish_connection(
                     BleakClientWithServiceCache,
-                    self._ble_device,
+                    ble_device,
                     self.address,
                     disconnected_callback=self._on_disconnect,
+                    max_attempts=CONNECT_MAX_ATTEMPTS,
+                    ble_device_callback=lambda: (
+                        bluetooth.async_ble_device_from_address(
+                            self.hass, self.address, connectable=True
+                        )
+                        or ble_device
+                    ),
                 )
+                self._client = client
 
-                await self._setup_notifications()
+                try:
+                    await self._setup_notifications()
+                except UpdateFailed:
+                    # Connected but useless without weight notifications;
+                    # drop the link so the reconnect loop starts over
+                    self._client = None
+                    with contextlib.suppress(BleakError):
+                        await client.disconnect()
+                    raise
 
                 self._last_successful_connection = datetime.now()
 
@@ -360,8 +415,12 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
             _LOGGER.error("Error decoding weight data: %s", err)
             return None
 
-    def _on_disconnect(self, _: BleakClientWithServiceCache) -> None:
+    def _on_disconnect(self, client: BleakClientWithServiceCache) -> None:
         """Handle disconnection."""
+        if self._client is not None and client is not self._client:
+            # Late callback from a client we already replaced
+            return
+
         self._total_disconnections += 1
         _LOGGER.info("Chipsea Scale disconnected (total: %d)", self._total_disconnections)
 
@@ -371,43 +430,17 @@ class ChipseaScaleDataUpdateCoordinator(DataUpdateCoordinator[ChipseaScaleData])
         self._unavailable_logged = False
         self.data = None
 
-        # Cancel ongoing reconnection and re-register callback
-        if self._reconnect_task and not self._reconnect_task.done():
-            self._reconnect_task.cancel()
-        self._register_bluetooth_callback()
-
         self.async_update_listeners()
 
-    def _register_bluetooth_callback(self) -> None:
-        """Register Bluetooth callback for device detection."""
-        if self._bluetooth_callback_unload:
-            self._bluetooth_callback_unload()
-
-        self._bluetooth_callback_unload = bluetooth.async_register_callback(
-            self.hass,
-            self._async_handle_bluetooth_event,
-            {"address": self.address},
-            bluetooth.BluetoothScanningMode.ACTIVE,
-        )
-
-    async def _async_reconnect(self) -> None:
-        """Attempt to reconnect to the scale."""
-        _LOGGER.debug("Attempting to reconnect to Chipsea Scale")
-        try:
-            await self._ensure_connected()
-        except asyncio.CancelledError:
-            _LOGGER.debug("Connection attempt was cancelled")
-            raise
-        except UpdateFailed:
-            pass
+        # If the scale is still on (link drop) it advertises again right away
+        # and the loop reconnects; if it was switched off, the loop waits
+        self._async_ensure_reconnect_loop()
 
     async def async_shutdown(self) -> None:
         """Disconnect from the scale."""
-        # Cancel reconnection task and unload callback
+        self._shutting_down = True
         if self._reconnect_task and not self._reconnect_task.done():
             self._reconnect_task.cancel()
-        if self._bluetooth_callback_unload:
-            self._bluetooth_callback_unload()
 
         # Disconnect client
         if self._client and self._client.is_connected:
