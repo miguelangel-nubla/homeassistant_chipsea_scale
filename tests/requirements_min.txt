@@ -1,0 +1,16 @@
+# Test harness pinned to the oldest supported Home Assistant (hacs.json "homeassistant")
+pytest-homeassistant-custom-component==0.13.224
+pytest-cov==6.0.0
+# Home Assistant 2025.3.3 pins this release, which was later yanked from PyPI
+aiohttp==3.11.13
+
+# Libraries the bluetooth integration loads, at the versions that release uses
+aiousbwatcher==1.1.1
+bleak==0.22.3
+bleak-retry-connector==3.9.0
+bluetooth-adapters==0.21.4
+bluetooth-auto-recovery==1.4.4
+bluetooth-data-tools==1.23.4
+dbus-fast==2.33.0
+habluetooth==3.24.1
+pyserial==3.5

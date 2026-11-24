@@ -1,0 +1,60 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please fill in as much as you can, it makes the problem much easier to find.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: input
+    id: scale
+    attributes:
+      label: Scale model
+      description: Brand and model, and the name it advertises over Bluetooth if you know it.
+      placeholder: ProfiCook PC-KW 1061
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+      placeholder: "1.3.0"
+    validations:
+      required: true
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "2026.11.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: bluetooth
+    attributes:
+      label: How is the scale connected?
+      options:
+        - Local Bluetooth adapter
+        - ESPHome Bluetooth proxy
+        - Shelly Bluetooth proxy
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: Settings → Devices & services → Chipsea Scale → ⋮ → Download diagnostics. Paste the file contents or attach it.
+      render: json
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug logs
+      description: Enable debug logging on the integration page, reproduce the problem, then disable it and paste the relevant lines.
+      render: text

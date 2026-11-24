@@ -4,7 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  # Only the latest test requirements; tests/requirements_min.txt stays on
+  # the oldest supported Home Assistant on purpose
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
+    groups:
+      test-requirements:
+        patterns: ["*"]

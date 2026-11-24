@@ -150,8 +150,17 @@ Go to **Settings** → **Devices & services** → **Chipsea Scale** → ⋮ → 
 python3.14 -m venv .venv
 .venv/bin/pip install -r requirements_test.txt
 .venv/bin/pytest --cov
-ruff check . && ruff format --check .
+ruff check . && ruff format --check .   # or: pre-commit install
 ```
+
+CI runs the tests against the latest Home Assistant and against the oldest supported version (`homeassistant` in `hacs.json`, requirements in `tests/requirements_min.txt`). When the integration starts using a newer Home Assistant API, raise both together.
+
+### Releasing
+
+1. Set `version` in `custom_components/chipsea_scale/manifest.json` and add a matching `## x.y.z` section to `CHANGELOG.md`.
+2. Commit, then tag and push: `git tag vx.y.z && git push origin vx.y.z`.
+
+The release workflow checks that the tag, manifest and changelog agree, runs all checks, and publishes the GitHub release with the changelog section as notes. The Marketplace picks up new releases automatically.
 
 The protocol is described in [PROTOCOL.md](protocol_notes.txt).
 

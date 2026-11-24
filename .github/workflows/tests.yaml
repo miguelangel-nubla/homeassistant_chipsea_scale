@@ -2,11 +2,17 @@ name: Tests
 
 on:
   push:
+    branches: [master]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   lint:
@@ -20,14 +26,24 @@ jobs:
           args: format --check
 
   pytest:
-    name: Pytest
+    name: Pytest (${{ matrix.name }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: latest Home Assistant
+            python: "3.14"
+            requirements: requirements_test.txt
+          - name: oldest supported Home Assistant
+            python: "3.13"
+            requirements: tests/requirements_min.txt
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.14"
+          python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: requirements_test.txt
-      - run: pip install -r requirements_test.txt
-      - run: pytest --cov --cov-report=term-missing
+          cache-dependency-path: ${{ matrix.requirements }}
+      - run: pip install -r ${{ matrix.requirements }}
+      - run: pytest --cov --cov-report=term-missing --cov-fail-under=95
