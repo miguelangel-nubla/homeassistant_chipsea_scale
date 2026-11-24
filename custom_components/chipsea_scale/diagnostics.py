@@ -1,15 +1,17 @@
 """Diagnostics support for Chipsea Scale."""
+
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.components.diagnostics import async_redact_data
+from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers.device_registry import DeviceEntry
 
 from .models import ChipseaScaleConfigEntry
 
-TO_REDACTED = {"address"}
+TO_REDACT = {CONF_ADDRESS}
 
 
 async def async_get_config_entry_diagnostics(
@@ -17,42 +19,25 @@ async def async_get_config_entry_diagnostics(
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
     coordinator = entry.runtime_data
+    data = coordinator.data
 
     return {
         "entry": {
             "title": entry.title,
-            "data": {
-                key: ("**REDACTED**" if key in TO_REDACTED else value)
-                for key, value in entry.data.items()
-            },
-            "options": entry.options,
+            "data": async_redact_data(dict(entry.data), TO_REDACT),
+            "options": dict(entry.options),
         },
-        "coordinator": {
-            "last_update_success": coordinator.last_update_success,
-            "last_exception": str(coordinator.last_exception) if coordinator.last_exception else None,
-            "update_interval": str(coordinator.update_interval) if coordinator.update_interval else None,
-            "address": "**REDACTED**",
+        "connection": {
             "connected": coordinator.is_connected,
             "notification_enabled": coordinator.notification_enabled,
-            "connection_stats": coordinator.connection_stats,
+            **coordinator.connection_stats,
         },
-        "data": {
-            "weight": coordinator.data.weight if coordinator.data else None,
-            "unit": coordinator.data.unit if coordinator.data else None,
-            "is_stable": coordinator.data.is_stable if coordinator.data else None,
-            "battery_level": coordinator.data.battery_level if coordinator.data else None,
-            "last_measurement": (
-                coordinator.data.last_measurement.isoformat()
-                if coordinator.data and coordinator.data.last_measurement
-                else None
-            ),
-        },
+        "last_reading": (
+            {
+                **asdict(data.reading),
+                "last_measurement": data.last_measurement.isoformat(),
+            }
+            if data
+            else None
+        ),
     }
-
-
-async def async_get_device_diagnostics(
-    hass: HomeAssistant, entry: ConfigEntry, device: DeviceEntry
-) -> dict[str, Any]:
-    """Return diagnostics for a device."""
-    return await async_get_config_entry_diagnostics(hass, entry)
-

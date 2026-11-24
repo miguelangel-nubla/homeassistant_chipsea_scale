@@ -1,23 +1,46 @@
-"""Config flow for Chipsea Scale integration."""
+"""Config flow for the Chipsea Scale integration."""
+
 from __future__ import annotations
 
-import logging
+import re
 from typing import Any
 
-from bleak import BleakScanner
+from homeassistant.components.bluetooth import (
+    BluetoothServiceInfoBleak,
+    async_discovered_service_info,
+)
+from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
+from homeassistant.const import CONF_ADDRESS
 import voluptuous as vol
 
-from homeassistant import config_entries
-from homeassistant.components import bluetooth
-from homeassistant.const import CONF_ADDRESS
-from homeassistant.data_entry_flow import FlowResult
+from .const import DEVICE_NAME_PREFIXES, DOMAIN, MANUFACTURER_ID
 
-from .const import DEVICE_NAME_PREFIXES, DOMAIN
-
-_LOGGER = logging.getLogger(__name__)
+MANUAL_ENTRY = "manual"
+_MAC_PATTERN = re.compile(r"^[0-9A-F]{12}$")
 
 
-class ChipseaScaleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+def is_supported_device(service_info: BluetoothServiceInfoBleak) -> bool:
+    """Return True if the advertisement looks like a Chipsea scale."""
+    if MANUFACTURER_ID in service_info.manufacturer_data:
+        return True
+    name = (service_info.name or "").lower()
+    return name.startswith(DEVICE_NAME_PREFIXES)
+
+
+def normalize_address(address: str) -> str | None:
+    """Return the address as AA:BB:CC:DD:EE:FF, or None if it is not a MAC."""
+    cleaned = re.sub(r"[\s:\-.]", "", address).upper()
+    if not _MAC_PATTERN.match(cleaned):
+        return None
+    return ":".join(cleaned[i : i + 2] for i in range(0, 12, 2))
+
+
+def _title(service_info: BluetoothServiceInfoBleak) -> str:
+    """Return a readable name for a discovered scale."""
+    return service_info.name or service_info.address
+
+
+class ChipseaScaleConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Chipsea Scale."""
 
     VERSION = 1
@@ -25,162 +48,96 @@ class ChipseaScaleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
     def __init__(self) -> None:
         """Initialize the config flow."""
-        self._discovered_devices: dict[str, str] = {}
-        self._discovery_info: bluetooth.BluetoothServiceInfoBleak | None = None
+        self._discovery_info: BluetoothServiceInfoBleak | None = None
+        self._discovered_devices: dict[str, BluetoothServiceInfoBleak] = {}
 
     async def async_step_bluetooth(
-        self, discovery_info: bluetooth.BluetoothServiceInfoBleak
-    ) -> FlowResult:
-        """Handle the bluetooth discovery step."""
-        # Check if this is actually a supported Chipsea scale device
-        if not self._is_supported_device(discovery_info.name, discovery_info.address):
+        self, discovery_info: BluetoothServiceInfoBleak
+    ) -> ConfigFlowResult:
+        """Handle a scale found by Bluetooth discovery."""
+        if not is_supported_device(discovery_info):
             return self.async_abort(reason="not_supported")
 
         await self.async_set_unique_id(discovery_info.address.upper())
         self._abort_if_unique_id_configured()
 
-        device_name = discovery_info.name or discovery_info.address
-        self.context["title_placeholders"] = {"name": device_name}
         self._discovery_info = discovery_info
-
+        self.context["title_placeholders"] = {"name": _title(discovery_info)}
         return await self.async_step_bluetooth_confirm()
 
     async def async_step_bluetooth_confirm(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Confirm discovery."""
+    ) -> ConfigFlowResult:
+        """Confirm setting up a discovered scale."""
         assert self._discovery_info is not None
+        title = _title(self._discovery_info)
 
         if user_input is not None:
             return self.async_create_entry(
-                title=self._discovery_info.name or self._discovery_info.address,
+                title=title,
                 data={CONF_ADDRESS: self._discovery_info.address.upper()},
             )
 
         self._set_confirm_only()
         return self.async_show_form(
             step_id="bluetooth_confirm",
-            description_placeholders={
-                "name": self._discovery_info.name or self._discovery_info.address
-            },
+            description_placeholders={"name": title},
         )
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle the initial step."""
-        errors: dict[str, str] = {}
-
+    ) -> ConfigFlowResult:
+        """Let the user pick a discovered scale or enter an address."""
         if user_input is not None:
             address = user_input[CONF_ADDRESS]
-
-            # Handle manual entry selection
-            if address == "manual":
+            if address == MANUAL_ENTRY:
                 return await self.async_step_manual()
 
-            address = address.upper()
-            await self.async_set_unique_id(address)
+            await self.async_set_unique_id(address, raise_on_progress=False)
             self._abort_if_unique_id_configured()
-
-            # Try to find the device via Bluetooth
-            ble_device = bluetooth.async_ble_device_from_address(
-                self.hass, address, connectable=True
+            return self.async_create_entry(
+                title=_title(self._discovered_devices[address]),
+                data={CONF_ADDRESS: address},
             )
 
-            if not ble_device:
-                errors[CONF_ADDRESS] = "cannot_connect"
-            else:
-                return self.async_create_entry(
-                    title=ble_device.name or address,
-                    data={CONF_ADDRESS: address},
-                )
+        current_addresses = self._async_current_ids(include_ignore=False)
+        self._discovered_devices = {
+            address: info
+            for info in async_discovered_service_info(self.hass, connectable=True)
+            if (address := info.address.upper()) not in current_addresses
+            and is_supported_device(info)
+        }
+        if not self._discovered_devices:
+            return await self.async_step_manual()
 
-        # Discover available scales
-        await self._async_discover_scales()
-
-        data_schema = vol.Schema({
-            vol.Required(CONF_ADDRESS): vol.In(self._discovered_devices)
-        })
-
+        options = {
+            address: f"{_title(info)} ({address})"
+            for address, info in self._discovered_devices.items()
+        }
+        options[MANUAL_ENTRY] = "Enter address manually"
         return self.async_show_form(
             step_id="user",
-            data_schema=data_schema,
-            errors=errors,
+            data_schema=vol.Schema({vol.Required(CONF_ADDRESS): vol.In(options)}),
         )
-
-    async def _async_discover_scales(self) -> None:
-        """Discover Chipsea scales."""
-        self._discovered_devices = {}
-
-        try:
-            # First try to get devices from Bluetooth integration
-            for service_info in bluetooth.async_discovered_service_info(self.hass):
-                if self._is_supported_device(service_info.name, service_info.address):
-                    name = service_info.name or service_info.address
-                    self._discovered_devices[service_info.address.upper()] = (
-                        f"{name} ({service_info.address})"
-                    )
-
-            # If no devices found, try active scanning
-            if not self._discovered_devices:
-                devices = await BleakScanner.discover(timeout=10.0)
-                for device in devices:
-                    if self._is_supported_device(device.name, device.address):
-                        name = device.name or device.address
-                        self._discovered_devices[device.address.upper()] = (
-                            f"{name} ({device.address})"
-                        )
-
-        except Exception as err:
-            _LOGGER.error("Error discovering scales: %s", err)
-
-        # Add manual entry option
-        self._discovered_devices["manual"] = "Enter address manually"
-
-    def _is_supported_device(self, name: str | None, address: str) -> bool:
-        """Check if this is a supported Chipsea scale device."""
-        if not name:
-            return False
-
-        name_lower = name.lower()
-        return any(name_lower.startswith(prefix.lower()) for prefix in DEVICE_NAME_PREFIXES)
 
     async def async_step_manual(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Handle manual address entry."""
+    ) -> ConfigFlowResult:
+        """Let the user enter the scale's Bluetooth address."""
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            try:
-                address = user_input[CONF_ADDRESS].strip().upper()
-                
-                # Remove common separators
-                cleaned_address = address.replace(":", "").replace("-", "").replace(" ", "")
-                
-                # Validate MAC address format
-                if len(cleaned_address) != 12 or not all(c in "0123456789ABCDEF" for c in cleaned_address):
-                    errors[CONF_ADDRESS] = "invalid_address"
-                else:
-                    # Format as proper MAC address
-                    formatted_address = ":".join([cleaned_address[i:i+2] for i in range(0, 12, 2)])
-                    
-                    await self.async_set_unique_id(formatted_address)
-                    self._abort_if_unique_id_configured()
-
-                    return self.async_create_entry(
-                        title=formatted_address,
-                        data={CONF_ADDRESS: formatted_address},
-                    )
-            except Exception as err:
-                _LOGGER.error("Error processing manual address entry: %s", err)
-                errors["base"] = "unknown"
+            if (address := normalize_address(user_input[CONF_ADDRESS])) is None:
+                errors[CONF_ADDRESS] = "invalid_address"
+            else:
+                await self.async_set_unique_id(address, raise_on_progress=False)
+                self._abort_if_unique_id_configured()
+                return self.async_create_entry(
+                    title=address, data={CONF_ADDRESS: address}
+                )
 
         return self.async_show_form(
             step_id="manual",
-            data_schema=vol.Schema({
-                vol.Required(CONF_ADDRESS): str,
-            }),
+            data_schema=vol.Schema({vol.Required(CONF_ADDRESS): str}),
             errors=errors,
         )
-

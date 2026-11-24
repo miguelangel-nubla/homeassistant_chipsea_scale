@@ -1,128 +1,108 @@
-# Chipsea Scale Integration for Home Assistant
+# Chipsea Scale for Home Assistant
 
 [![GitHub Release][releases-shield]][releases]
-[![GitHub Activity][commits-shield]][commits]
+[![Validate][validate-shield]][validate]
+[![Tests][tests-shield]][tests]
 [![License][license-shield]](LICENSE)
-[![hacs][hacsbadge]][hacs]
 
-[![Add to HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=miguelangel-nubla&repository=homeassistant_chipsea_scale&category=integration)
+[![Open your Home Assistant instance and open this repository in the Marketplace.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=miguelangel-nubla&repository=homeassistant_chipsea_scale&category=integration)
 
-A Home Assistant custom integration for Chipsea-based Bluetooth smart scales including:
-- Chipsea-BLE branded scales
-- SmartChef kitchen scales  
+A Home Assistant integration for Bluetooth kitchen scales built on the Chipsea chipset, such as:
+
+- Scales advertising as `Chipsea-BLE`
+- SmartChef kitchen scales
 - ProfiCook PC-KW scales
-- And other Chipsea-based smart scales
+- Other scales advertising the Chipsea Bluetooth manufacturer ID (4298)
 
 ## Features
 
-- **Automatic Discovery**: Bluetooth devices are automatically discovered
-- **Real-time Updates**: Instant weight readings when scale is in use
-- **Multiple Units**: Supports grams, kilograms, pounds, and ounces
-- **Smart Availability**: Entity becomes unavailable when scale goes to sleep
-- **Battery Efficient**: Connects only while the scale is advertising - no connection attempts while it sleeps
-- **Reliable Reconnection**: Keeps retrying while the scale is awake, so a failed attempt or a quick power-cycle never leaves it disconnected
-- **Gold Quality**: Meets Home Assistant's Gold quality standards
-
-## Supported Devices
-
-This integration works with Bluetooth smart scales that use the Chipsea chipset and protocol, including:
-
-- Scales advertising as "Chipsea-BLE"
-- SmartChef kitchen scales
-- ProfiCook PC-KW series
-- Generic scales with manufacturer ID 4298
-- Scales using service UUID `0000fff0-0000-1000-8000-00805f9b34fb`
+- **Automatic discovery** of scales over Bluetooth, including through ESPHome Bluetooth proxies
+- **Instant readings**: the scale pushes every weight change; nothing is polled
+- **Any display unit**: readings in g, kg, lb or oz are all reported in grams
+- **Honest availability**: the sensor is unavailable while the scale sleeps and returns as soon as it wakes up
+- **Battery friendly**: connects only while the scale is advertising, and keeps retrying while it is awake so a failed attempt never leaves it disconnected
 
 ## Installation
 
-### HACS (Recommended)
+### Home Assistant Marketplace
 
-1. Open HACS in Home Assistant
-2. Go to "Integrations" 
-3. Click the 3 dots menu and select "Custom repositories"
-4. Add this repository URL: `https://github.com/miguelangel-nubla/homeassistant_chipsea_scale`
-5. Select category "Integration" and click "Add"
-6. Find "Chipsea Scale" in the list and click "Download"
-7. Restart Home Assistant
+1. Click the button above, or in Home Assistant go to **Settings** → **Marketplace**, add `https://github.com/miguelangel-nubla/homeassistant_chipsea_scale` as a custom repository of type **Integration**, and open it.
+2. Click **Download**.
+3. Restart Home Assistant.
 
-### Manual Installation
+On Home Assistant versions before 2026.11, the same steps work in HACS.
 
-1. Download the latest release from the [releases page][releases]
-2. Extract the files to your `custom_components` directory:
-   ```
-   custom_components/
-   └── chipsea_scale/
-       ├── __init__.py
-       ├── config_flow.py
-       ├── coordinator.py
-       ├── models.py
-       ├── sensor.py
-       ├── const.py
-       ├── diagnostics.py
-       ├── manifest.json
-       ├── strings.json
-       └── hacs.json
-   ```
-3. Restart Home Assistant
+### Manual
+
+1. Download the latest release from the [releases page][releases].
+2. Copy the `custom_components/chipsea_scale` folder into your Home Assistant `config/custom_components` folder.
+3. Restart Home Assistant.
 
 ## Configuration
 
-1. Go to **Settings** → **Devices & Services**
-2. Click **Add Integration**
-3. Search for "Chipsea Scale"
-4. Follow the setup wizard:
-   - Your scale should be automatically discovered
-   - If not found, you can manually enter the Bluetooth address
-5. The integration will create a weight sensor for your scale
+Wake the scale by placing something on it. Home Assistant usually discovers it on its own and shows a notification under **Settings** → **Devices & services**. You can also add it yourself:
 
-## Usage
+1. Go to **Settings** → **Devices & services** → **Add integration** and search for **Chipsea Scale**.
+2. Pick your scale from the list, or choose **Enter address manually** and type its Bluetooth address (for example `AA:BB:CC:DD:EE:FF`).
 
-- **Power on your scale** by stepping on it or placing an item
-- The weight sensor will show the current measurement in grams
-- Additional attributes show the scale's native unit and raw reading
-- When the scale goes to sleep, the entity becomes "unavailable"
-- Wake the scale by using it again - the entity will immediately become available
+A scale added by address can be set up while it is asleep. It connects the next time it wakes up.
 
-## Sensor Attributes
+## Entities
 
-The weight sensor provides these attributes:
+| Entity | Description |
+| --- | --- |
+| Weight | Current weight in grams. Unavailable while the scale is asleep or until the first reading after it wakes up. |
 
-- `scale_unit`: The unit reported by the scale (g, kg, lb, oz)
-- `raw_weight`: The weight in the scale's native unit
-- `decimal_places`: Number of decimal places from the scale
-- `is_stable`: Whether the reading is stable
-- `last_measurement`: Timestamp of the last reading
+The weight sensor also has these attributes:
+
+| Attribute | Description |
+| --- | --- |
+| `scale_unit` | Unit shown on the scale's display (`g`, `kg`, `lb` or `oz`) |
+| `raw_weight` | Weight as shown on the display, in `scale_unit` |
+| `decimal_places` | Decimal places shown on the display |
+| `is_stable` | Whether the scale reports the reading as settled |
+| `last_measurement` | When the reading arrived |
+
+`raw_weight` and `last_measurement` change with almost every reading, so they are not stored in the recorder history.
 
 ## Troubleshooting
 
-### Scale Not Discovered
-- Ensure the scale is powered on and in pairing/advertising mode
-- Check that Bluetooth is enabled on your Home Assistant system
-- Try manually adding the scale using its MAC address
+**The scale is not discovered**
+- Make sure the scale is on. Most scales only advertise for a short time after they wake up.
+- Make sure a Bluetooth adapter or an ESPHome Bluetooth proxy that supports active connections is within range.
+- Add the scale manually by its Bluetooth address.
 
-### Connection Issues
-- Battery-powered scales disconnect frequently to save power - this is normal
-- The integration will automatically reconnect when the scale advertises
-- Check the diagnostic information for connection statistics
+**The sensor is unavailable**
+- This is normal while the scale is off or asleep. It becomes available again with the first reading after it wakes up.
+- The integration logs a single message when it cannot connect to an awake scale, and another when it is back online.
 
-### Getting Diagnostic Information
-Go to **Settings** → **Devices & Services** → **Chipsea Scale** → **Download Diagnostics** to get detailed information for troubleshooting.
+**Diagnostics**
+Go to **Settings** → **Devices & services** → **Chipsea Scale** → ⋮ → **Download diagnostics**. The file includes connection statistics and the last reading. The Bluetooth address is redacted. For more detail, enable debug logging on the same page and reproduce the problem.
+
+## Development
+
+```bash
+python3.14 -m venv .venv
+.venv/bin/pip install -r requirements_test.txt
+.venv/bin/pytest --cov
+ruff check . && ruff format --check .
+```
+
+The protocol is described in [protocol_notes.txt](protocol_notes.txt).
 
 ## Contributing
 
-Issues and feature requests are welcome! Please check the [issue tracker][issues] before creating a new issue.
+Issues and pull requests are welcome. Please check the [issue tracker][issues] first.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
+MIT. See [LICENSE](LICENSE).
 
 [releases-shield]: https://img.shields.io/github/release/miguelangel-nubla/homeassistant_chipsea_scale.svg?style=for-the-badge
 [releases]: https://github.com/miguelangel-nubla/homeassistant_chipsea_scale/releases
-[commits-shield]: https://img.shields.io/github/commit-activity/y/miguelangel-nubla/homeassistant_chipsea_scale.svg?style=for-the-badge
-[commits]: https://github.com/miguelangel-nubla/homeassistant_chipsea_scale/commits/main
+[validate-shield]: https://img.shields.io/github/actions/workflow/status/miguelangel-nubla/homeassistant_chipsea_scale/validate.yaml?branch=master&label=validate&style=for-the-badge
+[validate]: https://github.com/miguelangel-nubla/homeassistant_chipsea_scale/actions/workflows/validate.yaml
+[tests-shield]: https://img.shields.io/github/actions/workflow/status/miguelangel-nubla/homeassistant_chipsea_scale/tests.yaml?branch=master&label=tests&style=for-the-badge
+[tests]: https://github.com/miguelangel-nubla/homeassistant_chipsea_scale/actions/workflows/tests.yaml
 [license-shield]: https://img.shields.io/github/license/miguelangel-nubla/homeassistant_chipsea_scale.svg?style=for-the-badge
-[hacs]: https://github.com/hacs/integration
-[hacsbadge]: https://img.shields.io/badge/HACS-Custom-orange.svg?style=for-the-badge
 [issues]: https://github.com/miguelangel-nubla/homeassistant_chipsea_scale/issues
