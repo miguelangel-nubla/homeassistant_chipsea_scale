@@ -19,7 +19,7 @@ def _packet(status: int, raw: int) -> bytes:
         (_packet(0x00, 123), ScaleReading(123.0, 123.0, "g", 0, False)),
         # Grams, 1 decimal, stable
         (_packet(0x03, 1234), ScaleReading(123.4, 123.4, "g", 1, True)),
-        # Kilograms, 3 decimals, unstable (example from protocol_notes.txt)
+        # Kilograms, 3 decimals, unstable (example from PROTOCOL.md)
         (_packet(0x46, 2056), ScaleReading(2056.0, 2.056, "kg", 3, False)),
         # Kilograms, 3 decimals, negative, stable
         (_packet(0xC7, 150), ScaleReading(-150.0, -0.15, "kg", 3, True)),

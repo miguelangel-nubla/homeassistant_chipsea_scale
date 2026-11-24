@@ -1,3 +1,10 @@
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="custom_components/chipsea_scale/brand/dark_icon@2x.png">
+    <img src="custom_components/chipsea_scale/brand/icon@2x.png" alt="" width="128">
+  </picture>
+</p>
+
 # Chipsea Scale for Home Assistant
 
 [![GitHub Release][releases-shield]][releases]
@@ -7,7 +14,7 @@
 
 [![Open your Home Assistant instance and open this repository in the Marketplace.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=miguelangel-nubla&repository=homeassistant_chipsea_scale&category=integration)
 
-A Home Assistant integration for Bluetooth kitchen scales built on the Chipsea chipset, such as:
+Bring the weight on your Bluetooth kitchen scale into Home Assistant as it changes. Works with scales built on the Chipsea chipset, such as:
 
 - Scales advertising as `Chipsea-BLE`
 - SmartChef kitchen scales
@@ -21,6 +28,12 @@ A Home Assistant integration for Bluetooth kitchen scales built on the Chipsea c
 - **Any display unit**: readings in g, kg, lb or oz are all reported in grams
 - **Honest availability**: the sensor is unavailable while the scale sleeps and returns as soon as it wakes up
 - **Battery friendly**: connects only while the scale is advertising, and keeps retrying while it is awake so a failed attempt never leaves it disconnected
+
+## How it works
+
+The scale is off most of the time. When you put something on it, it wakes up and starts advertising over Bluetooth. Home Assistant notices, connects (directly or through an ESPHome Bluetooth proxy) and subscribes to weight updates. Every change on the display then reaches Home Assistant within moments. When the scale turns itself off, the connection drops and the sensor becomes unavailable until the next time it wakes up.
+
+The integration never wakes the scale and never polls it, so it does not affect battery life.
 
 ## Installation
 
@@ -65,6 +78,53 @@ The weight sensor also has these attributes:
 
 `raw_weight` and `last_measurement` change with almost every reading, so they are not stored in the recorder history.
 
+## Examples
+
+Notify when something placed on the scale has settled:
+
+```yaml
+automation:
+  - alias: "Announce weighed item"
+    triggers:
+      - trigger: state
+        entity_id: sensor.chipsea_ble_weight
+        attribute: is_stable
+        to: true
+    conditions:
+      - condition: numeric_state
+        entity_id: sensor.chipsea_ble_weight
+        above: 5
+    actions:
+      - action: notify.notify
+        data:
+          message: "Weighed {{ states('sensor.chipsea_ble_weight') | round(0) }} g"
+```
+
+Track how much coffee is left in a container on the scale, ignoring readings while it is being moved:
+
+```yaml
+template:
+  - triggers:
+      - trigger: state
+        entity_id: sensor.chipsea_ble_weight
+        attribute: is_stable
+        to: true
+    sensor:
+      - name: "Coffee beans left"
+        unit_of_measurement: g
+        device_class: weight
+        state: "{{ [states('sensor.chipsea_ble_weight') | float(0) - 350, 0] | max | round(0) }}"
+```
+
+Replace `sensor.chipsea_ble_weight` with your sensor's entity ID, and `350` with the weight of your empty container.
+
+## Known limitations
+
+- Readings are only available while the scale is on. Its own auto-off timer decides when it sleeps.
+- Tare, unit changes and power are controlled on the scale only. The protocol has no known commands for them.
+- Readings above 5 kg are discarded as corrupt, which matches the capacity of supported kitchen scales.
+- Each scale can be connected to only one device at a time. Close the manufacturer's app if Home Assistant cannot connect.
+
 ## Troubleshooting
 
 **The scale is not discovered**
@@ -79,6 +139,11 @@ The weight sensor also has these attributes:
 **Diagnostics**
 Go to **Settings** → **Devices & services** → **Chipsea Scale** → ⋮ → **Download diagnostics**. The file includes connection statistics and the last reading. The Bluetooth address is redacted. For more detail, enable debug logging on the same page and reproduce the problem.
 
+## Removing the integration
+
+1. Go to **Settings** → **Devices & services** → **Chipsea Scale**, open the ⋮ menu of the scale and select **Delete**.
+2. To remove the files too, uninstall it from **Settings** → **Marketplace**, or delete the `custom_components/chipsea_scale` folder, and restart Home Assistant.
+
 ## Development
 
 ```bash
@@ -88,7 +153,7 @@ python3.14 -m venv .venv
 ruff check . && ruff format --check .
 ```
 
-The protocol is described in [protocol_notes.txt](protocol_notes.txt).
+The protocol is described in [PROTOCOL.md](protocol_notes.txt).
 
 ## Contributing
 
