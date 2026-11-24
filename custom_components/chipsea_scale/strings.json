@@ -1,31 +1,32 @@
 {
   "config": {
+    "flow_title": "{name}",
     "step": {
       "bluetooth_confirm": {
-        "title": "Confirm Chipsea Scale",
-        "description": "Do you want to set up the Chipsea Scale {name}?"
+        "description": "Do you want to set up {name}?"
       },
       "user": {
-        "title": "Select Chipsea Scale",
-        "description": "Select your Chipsea Scale from the list of discovered devices.",
+        "description": "Select your scale from the discovered devices.",
         "data": {
           "address": "Device"
         }
       },
       "manual": {
-        "title": "Add Chipsea Scale Manually",
-        "description": "Enter the Bluetooth address of your Chipsea Scale.",
+        "description": "Enter the Bluetooth address of your scale. It is set up even while asleep and connects as soon as it wakes up.",
         "data": {
-          "address": "Bluetooth Address"
+          "address": "Bluetooth address"
+        },
+        "data_description": {
+          "address": "For example AA:BB:CC:DD:EE:FF"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to the scale. Make sure it's turned on and in range.",
-      "invalid_address": "Invalid Bluetooth address format. Please enter a valid MAC address (e.g., AA:BB:CC:DD:EE:FF)."
+      "invalid_address": "Invalid Bluetooth address. Enter it as AA:BB:CC:DD:EE:FF."
     },
     "abort": {
       "already_configured": "Device is already configured",
+      "already_in_progress": "Configuration flow is already in progress",
       "not_supported": "Device is not a supported Chipsea scale"
     }
   },
