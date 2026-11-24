@@ -1,7 +1,7 @@
 """Decoder for Chipsea scale weight notifications.
 
 Kept free of Home Assistant imports so the protocol can be tested on its own.
-See protocol_notes.txt in the repository for the packet layout.
+See PROTOCOL.md in the repository for the packet layout.
 """
 
 from __future__ import annotations
