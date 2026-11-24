@@ -79,9 +79,8 @@ async def test_setup_while_asleep(
 
     entity = entity_registry.async_get(ENTITY_ID)
     assert entity.unique_id == f"{ADDRESS}_weight"
-    device = device_registry.async_get_device_by_identifier(
-        (DOMAIN, ADDRESS), mock_config_entry.entry_id
-    )
+    device = device_registry.async_get(entity.device_id)
+    assert (DOMAIN, ADDRESS) in device.identifiers
     assert device.name == NAME
     assert device.manufacturer == "Chipsea"
 

@@ -8,7 +8,7 @@ Prepared for the Home Assistant Marketplace.
 - The weight is reported with decimals instead of being rounded to whole grams. The display still defaults to whole grams; change it in the entity settings.
 - Packets with an unrecognized unit are ignored instead of being reported as grams.
 - `raw_weight` and `last_measurement` are no longer stored in the recorder history.
-- Requires Home Assistant 2025.2 or newer.
+- Requires Home Assistant 2025.3 or newer.
 
 ### Fixed
 - The setup dialogs and the entity name were not translated.

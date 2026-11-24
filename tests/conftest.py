@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Generator
+import inspect
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -21,6 +22,11 @@ from custom_components.chipsea_scale.const import (
     DOMAIN,
     MANUFACTURER_ID,
     SERVICE_UUID,
+)
+
+# bleak < 1.0 requires rssi; newer versions warn when it is passed
+_BLE_DEVICE_EXTRA = (
+    {"rssi": -60} if "rssi" in inspect.signature(BLEDevice.__init__).parameters else {}
 )
 
 ADDRESS = "AA:BB:CC:DD:EE:FF"
@@ -46,7 +52,7 @@ def make_service_info(
         service_data={},
         service_uuids=service_uuids if service_uuids is not None else [SERVICE_UUID],
         source="local",
-        device=BLEDevice(address, name, {}),
+        device=BLEDevice(address, name, {}, **_BLE_DEVICE_EXTRA),
         advertisement=None,
         connectable=True,
         time=time if time is not None else MONOTONIC_TIME(),

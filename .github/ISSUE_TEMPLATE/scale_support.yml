@@ -1,0 +1,25 @@
+name: Support for another scale
+description: Ask for a Chipsea based scale that is not recognized yet
+labels: [new device]
+body:
+  - type: input
+    id: scale
+    attributes:
+      label: Scale brand and model
+    validations:
+      required: true
+  - type: textarea
+    id: advertisement
+    attributes:
+      label: Bluetooth advertisement
+      description: |
+        Settings → System → Hardware → ⋮ → Bluetooth → Advertisement monitor. Wake the scale, select it and paste its name, manufacturer data and service UUIDs.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: packets
+    attributes:
+      label: Weight packets (optional)
+      description: If you added the scale manually, enable debug logging, weigh something and paste a few "Notification from" log lines along with the weight shown on the display.
+      render: text
